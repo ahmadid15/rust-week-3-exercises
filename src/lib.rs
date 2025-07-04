@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
-use std::fmt;
+use serde::{Deserialize, Serialize}; //Imported to enable conversion of data structures.
+use std::fmt; //To enable formatting
 use std::ops::Deref;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
@@ -168,6 +168,37 @@ pub struct TransactionInput {
     pub sequence: u32,
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub struct TransactionOutput {
+    pub value: u64,
+    pub script_pubkey: Script,
+}
+
+impl TransactionOutput {
+    pub fn new(value: u64, script_pubkey: Script) -> Self {
+        TransactionOutput {
+            value,
+            script_pubkey,
+        }
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = self.value.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&self.script_pubkey.to_bytes());
+        bytes
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<(Self, usize), BitcoinError> {
+        if bytes.len() < 8 {
+            return Err(BitcoinError::InsufficientBytes);
+        }
+        let value = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+        let (script_pubkey, script_len) = Script::from_bytes(&bytes[8..])?;
+        let total_len = 8 + script_len;
+        Ok((TransactionOutput::new(value, script_pubkey), total_len))
+    }
+}
+
 impl TransactionInput {
     pub fn new(previous_output: OutPoint, script_sig: Script, sequence: u32) -> Self {
         TransactionInput {
@@ -208,14 +239,21 @@ impl TransactionInput {
 pub struct BitcoinTransaction {
     pub version: u32,
     pub inputs: Vec<TransactionInput>,
+    pub outputs: Vec<TransactionOutput>,
     pub lock_time: u32,
 }
 
 impl BitcoinTransaction {
-    pub fn new(version: u32, inputs: Vec<TransactionInput>, lock_time: u32) -> Self {
+    pub fn new(
+        version: u32,
+        inputs: Vec<TransactionInput>,
+        outputs: Vec<TransactionOutput>,
+        lock_time: u32,
+    ) -> Self {
         BitcoinTransaction {
             version,
             inputs,
+            outputs,
             lock_time,
         }
     }
@@ -226,6 +264,10 @@ impl BitcoinTransaction {
         for input in &self.inputs {
             bytes.extend_from_slice(&input.to_bytes());
         }
+        bytes.extend_from_slice(&CompactSize::new(self.outputs.len() as u64).to_bytes());
+        for output in &self.outputs {
+            bytes.extend_from_slice(&output.to_bytes());
+        }
         bytes.extend_from_slice(&self.lock_time.to_le_bytes());
         bytes
     }
@@ -235,20 +277,31 @@ impl BitcoinTransaction {
             return Err(BitcoinError::InsufficientBytes);
         }
         let version = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
-        let (input_count, mut cursor) = CompactSize::from_bytes(&bytes[4..])?;
-        cursor += 4;
+        let (input_count, compact_size_len) = CompactSize::from_bytes(&bytes[4..])?;
+        let mut cursor = 4 + compact_size_len;
         let mut inputs = Vec::new();
         for _ in 0..input_count.value {
             let (input, input_len) = TransactionInput::from_bytes(&bytes[cursor..])?;
             inputs.push(input);
             cursor += input_len;
         }
+        let (output_count, compact_size_len) = CompactSize::from_bytes(&bytes[cursor..])?;
+        cursor += compact_size_len;
+        let mut outputs = Vec::new();
+        for _ in 0..output_count.value {
+            let (output, output_len) = TransactionOutput::from_bytes(&bytes[cursor..])?;
+            outputs.push(output);
+            cursor += output_len;
+        }
         if bytes.len() < cursor + 4 {
             return Err(BitcoinError::InsufficientBytes);
         }
         let lock_time = u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap());
         cursor += 4;
-        Ok((BitcoinTransaction::new(version, inputs, lock_time), cursor))
+        Ok((
+            BitcoinTransaction::new(version, inputs, outputs, lock_time),
+            cursor,
+        ))
     }
 }
 
@@ -274,6 +327,19 @@ impl fmt::Display for BitcoinTransaction {
             writeln!(f, "        Length: {}", input.script_sig.bytes.len())?;
             writeln!(f, "        Bytes: {}", hex::encode(&input.script_sig.bytes))?;
             writeln!(f, "      Sequence: {}", input.sequence)?;
+        }
+        writeln!(f, "  ]")?;
+        writeln!(f, "  Outputs: [")?;
+        for output in &self.outputs {
+            writeln!(f, "    Output:")?;
+            writeln!(f, "      Value: {}", output.value)?;
+            writeln!(f, "      Script PubKey:")?;
+            writeln!(f, "        Length: {}", output.script_pubkey.bytes.len())?;
+            writeln!(
+                f,
+                "        Bytes: {}",
+                hex::encode(&output.script_pubkey.bytes)
+            )?;
         }
         writeln!(f, "  ]")?;
         writeln!(f, "  Lock Time: {}", self.lock_time)
