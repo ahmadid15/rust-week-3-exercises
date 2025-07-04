@@ -67,13 +67,24 @@ mod tests {
     }
 
     #[test]
+    fn test_tx_output_roundtrip() {
+        let script = Script::new(vec![0x01, 0x02, 0x03]);
+        let output = TransactionOutput::new(1000, script.clone());
+        let bytes = output.to_bytes();
+        let (parsed, consumed) = TransactionOutput::from_bytes(&bytes).unwrap();
+        assert_eq!(parsed, output);
+        assert_eq!(consumed, bytes.len());
+    }
+
+    #[test]
     fn test_bitcoin_tx_roundtrip() {
         let inputs = vec![TransactionInput::new(
             OutPoint::new(dummy_txid(1), 0),
             Script::new(vec![0x01, 0x02]),
             0xFFFFFFFF,
         )];
-        let tx = BitcoinTransaction::new(2, inputs.clone(), 1000);
+        let outputs = vec![TransactionOutput::new(1000, Script::new(vec![0x03, 0x04]))];
+        let tx = BitcoinTransaction::new(2, inputs.clone(), outputs.clone(), 1000);
         let bytes = tx.to_bytes();
         let (parsed, consumed) = BitcoinTransaction::from_bytes(&bytes).unwrap();
         assert_eq!(parsed, tx);
@@ -87,7 +98,8 @@ mod tests {
             Script::new(vec![0xDE, 0xAD, 0xBE, 0xEF]),
             0xABCDEF01,
         );
-        let tx = BitcoinTransaction::new(1, vec![input], 999);
+        let output = TransactionOutput::new(2000, Script::new(vec![0xEF, 0xBE, 0xAD, 0xDE]));
+        let tx = BitcoinTransaction::new(1, vec![input], vec![output], 999);
 
         let json = serde_json::to_string_pretty(&tx).unwrap();
         let parsed: BitcoinTransaction = serde_json::from_str(&json).unwrap();
@@ -104,7 +116,8 @@ mod tests {
             Script::new(vec![0x01, 0x02, 0x03]),
             0xFFFFFFFF,
         );
-        let tx = BitcoinTransaction::new(1, vec![input], 0);
+        let output = TransactionOutput::new(3000, Script::new(vec![0x04, 0x05, 0x06]));
+        let tx = BitcoinTransaction::new(1, vec![input], vec![output], 0);
         let output = format!("{}", tx);
         assert!(output.contains("Version: 1"));
         assert!(output.contains("Lock Time: 0"));
